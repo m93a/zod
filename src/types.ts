@@ -3405,7 +3405,7 @@ export class ZodFunction<
 ///////////////////////////////////////
 export interface ZodLazyDef<T extends ZodTypeAny = ZodTypeAny>
   extends ZodTypeDef {
-  getter: () => T;
+  getter: (self: ZodLazy<T>) => T;
   typeName: ZodFirstPartyTypeKind.ZodLazy;
 }
 
@@ -3415,26 +3415,83 @@ export class ZodLazy<T extends ZodTypeAny> extends ZodType<
   input<T>
 > {
   get schema(): T {
-    return this._def.getter();
+    return this._def.getter(this);
   }
 
   _parse(input: ParseInput): ParseReturnType<this["_output"]> {
     const { ctx } = this._processInputParams(input);
-    const lazySchema = this._def.getter();
+    const lazySchema = this._def.getter(this);
     return lazySchema._parse({ data: ctx.data, path: ctx.path, parent: ctx });
   }
 
-  static create = <T extends ZodTypeAny>(
-    getter: () => T,
+  static create = <T extends ZodTypeAny, L extends string = 'lazy'>(
+    getter: (self: ZodLazySelf<L>) => T,
     params?: RawCreateParams
-  ): ZodLazy<T> => {
-    return new ZodLazy({
-      getter: getter,
+  ): ZodLazy<ResolveLazyType<L, T>> => {
+    return new ZodLazy<any>({
+      getter: getter as (self: any) => T,
       typeName: ZodFirstPartyTypeKind.ZodLazy,
       ...processCreateParams(params),
     });
   };
 }
+
+const ZodLazyLabel = Symbol('ZodLazyLabel');
+type ZodLazySelfValue<L extends string = 'label'> = { [ZodLazyLabel]: L };
+type ZodLazySelf<L extends string = 'label'> = ZodType<ZodLazySelfValue<L>>;
+
+type ResolveLazyValue<Label extends string, SelfValue, O = SelfValue> =
+  O extends ZodLazySelfValue<Label> ? SelfValue :
+  O extends readonly [...any[]] ? { [i in keyof O]: ResolveLazyValue<Label, SelfValue, O[i]> } :
+  O;
+
+type ResolveLazyValueInTuple<
+  Label extends string,
+  Self,
+  O extends readonly any[]
+> =
+  O extends readonly [] ? [] :
+  O extends readonly [infer T, ...infer Rest] ? [
+    ResolveLazyValue<Label, Self, T>, ...ResolveLazyValueInTuple<Label, Self, Rest>
+  ] :
+  never;
+
+type ResolveLazyType<Label extends string, Self extends ZodTypeAny, O extends ZodTypeAny = Self> =
+  O extends ZodLazySelf<Label> ? ResolveLazyType<Label, Self> :
+  O extends ZodArray<infer V, infer C> ? ZodArray<ResolveLazyType<Label, Self, V>, C> :
+  O extends ZodTuple<infer V, null> ? ZodTuple<ResolveLazyTypeInTuple<Label, Self, V>> :
+  O extends ZodTuple<infer V, infer R extends ZodTypeAny> ? ZodTuple<ResolveLazyTypeInTuple<Label, Self, V>, ResolveLazyType<Label, Self, R>> :
+  O extends ZodRecord<infer K, infer V> ? ZodRecord<K, ResolveLazyType<Label, Self, V>> :
+  O extends ZodMap<infer K, infer V> ? ZodMap<ResolveLazyType<Label, Self, K>, ResolveLazyType<Label, Self, V>> :
+  O extends ZodSet<infer V> ? ZodSet<ResolveLazyType<Label, Self, V>> :
+  O extends ZodFunction<infer T, infer R> ? ZodFunction<ResolveLazyType<Label, Self, T>, ResolveLazyType<Label, Self, R>> :
+  O extends ZodLazy<infer T> ? ZodLazy<ResolveLazyType<Label, Self, T>> :
+  O extends ZodUnion<[infer V extends ZodTypeAny, ...infer Rest extends ZodTypeAny[]]> ? ZodUnion<[
+    ResolveLazyType<Label, Self, V>,
+    ...ResolveLazyTypeInTuple<Label, Self, Rest>
+  ]> :
+  O extends ZodDiscriminatedUnion<infer D, infer V> ? ZodDiscriminatedUnion<D, ResolveLazyTypeInTuple<Label, Self, V>> :
+  O extends ZodIntersection<infer V, infer W> ? ZodIntersection<
+    ResolveLazyType<Label, Self, V>,
+    ResolveLazyType<Label, Self, W>
+  > :
+  O extends ZodObject<infer S, infer U, infer C, infer Out, infer In> ? ZodObject<
+    { [K in keyof S]: ResolveLazyType<Label, Self, S[K]> },
+    U, C
+    // TODO transform out
+  > :
+  O;
+
+type ResolveLazyTypeInTuple<
+  Label extends string,
+  Self extends ZodTypeAny,
+  O extends readonly ZodTypeAny[]
+> =
+  O extends readonly [] ? [] :
+  O extends readonly [infer T extends ZodTypeAny, ...infer Rest extends ZodTypeAny[]] ? [
+    ResolveLazyType<Label, Self, T>, ...ResolveLazyTypeInTuple<Label, Self, Rest>
+  ] :
+  never;
 
 //////////////////////////////////////////
 //////////////////////////////////////////
@@ -4464,3 +4521,20 @@ export {
 };
 
 export const NEVER = INVALID as never;
+
+
+const x = lazyType(self => objectType({
+  foo: stringType(),
+  bar: self
+}))
+
+type X = TypeOf<typeof x>;
+
+const y = lazyType(self => tupleType([stringType(), stringType().or(self)]));
+type Y = TypeOf<typeof y>;
+
+
+type IsTuple<T> =
+  T extends [...any[]] ? true : false;
+
+type ResolveLazyTypeInTupleZ = IsTuple<[42, string][]>
